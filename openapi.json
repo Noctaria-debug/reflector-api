@@ -1,0 +1,50 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Reflector API",
+    "version": "1.0.0",
+    "description": "An API for syncing and retrieving Second's state and memory from Google Drive."
+  },
+  "servers": [
+    {
+      "url": "https://reflector-api.onrender.com"
+    }
+  ],
+  "paths": {
+    "/": {
+      "get": {
+        "summary": "Check API status",
+        "responses": {
+          "200": {
+            "description": "API is running"
+          }
+        }
+      }
+    },
+    "/drive/sync": {
+      "post": {
+        "summary": "Sync data to Google Drive",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file_name": { "type": "string" },
+                  "content": { "type": "object" }
+                },
+                "required": ["file_name", "content"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sync success"
+          }
+        }
+      }
+    }
+  }
+}

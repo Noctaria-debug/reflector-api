@@ -1,0 +1,17 @@
+{
+  "schema_version": "v1",
+  "name_for_human": "Reflector API",
+  "name_for_model": "reflector_api",
+  "description_for_human": "Syncs Second's memory and state to Google Drive and retrieves updates.",
+  "description_for_model": "Provides endpoints for syncing Second's YAML state and memory data to Google Drive, and fetching updates.",
+  "auth": {
+    "type": "none"
+  },
+  "api": {
+    "type": "openapi",
+    "url": "https://reflector-api.onrender.com/openapi.json"
+  },
+  "logo_url": "https://reflector-api.onrender.com/static/logo.png",
+  "contact_email": "admin@noctaria.dev",
+  "legal_info_url": "https://reflector-api.onrender.com/legal"
+}
