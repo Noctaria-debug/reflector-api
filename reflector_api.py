@@ -22,15 +22,15 @@ def sync_drive():
         if not file_name or not content:
             return jsonify({"error": "file_name and content required"}), 400
 
-        # OAuthトークンをRenderの環境変数から読み込む
+        # OAuth情報をRender環境変数から読み込む
+        creds_json = os.environ.get("GOOGLE_OAUTH_CLIENT_JSON")
         token_json = os.environ.get("GOOGLE_TOKEN_JSON")
-        creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
 
-        if not token_json or not creds_json:
+        if not creds_json or not token_json:
             return jsonify({"error": "Missing OAuth credentials"}), 500
 
-        token_data = json.loads(token_json)
         creds_data = json.loads(creds_json)
+        token_data = json.loads(token_json)
 
         creds = Credentials(
             token=token_data.get("token"),
@@ -47,12 +47,13 @@ def sync_drive():
 
         service = build("drive", "v3", credentials=creds)
 
-        # Driveにアップロード
+        # JSONファイルをDriveにアップロード
         file_metadata = {"name": file_name}
         media = MediaIoBaseUpload(
             io.BytesIO(json.dumps(content, ensure_ascii=False, indent=2).encode("utf-8")),
             mimetype="application/json"
         )
+
         uploaded_file = service.files().create(
             body=file_metadata,
             media_body=media,
