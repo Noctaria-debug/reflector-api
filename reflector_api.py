@@ -1,99 +1,69 @@
 from flask import Flask, request, jsonify
+import os
+import json
+import io
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-from google.oauth2 import service_account
-import os
-import io
-import json
+from google.oauth2.credentials import Credentials
 
 app = Flask(__name__)
 
-# ============================================================
-# Google Drive 認証設定
-# ============================================================
-
-def get_drive_service():
-    """
-    Google Drive API の認証情報を取得
-    Render環境変数 GOOGLE_CREDENTIALS_JSON から読み込む
-    """
-    try:
-        if "GOOGLE_CREDENTIALS_JSON" in os.environ:
-            creds_json = os.environ["GOOGLE_CREDENTIALS_JSON"]
-            creds_dict = json.loads(creds_json)
-            creds = service_account.Credentials.from_service_account_info(
-                creds_dict, scopes=["https://www.googleapis.com/auth/drive.file"]
-            )
-        else:
-            raise RuntimeError("環境変数 GOOGLE_CREDENTIALS_JSON が設定されていません。")
-        service = build("drive", "v3", credentials=creds)
-        return service
-    except Exception as e:
-        print(f"[ERROR] 認証に失敗しました: {e}")
-        return None
-
-
-# ============================================================
-# API エンドポイント
-# ============================================================
-
-@app.route("/", methods=["GET"])
-def home():
-    return jsonify({"status": "Reflector API active"}), 200
-
+@app.route("/")
+def index():
+    return jsonify({"status": "Reflector API active"})
 
 @app.route("/drive/sync", methods=["POST"])
-def drive_sync():
-    """
-    Second の YAMLやJSONデータをGoogle Driveにアップロードする。
-    ファイルが存在すれば更新、存在しなければ新規作成。
-    """
+def sync_drive():
     try:
         data = request.get_json()
         file_name = data.get("file_name")
         content = data.get("content")
 
         if not file_name or not content:
-            return jsonify({"error": "file_name と content は必須です"}), 400
+            return jsonify({"error": "file_name and content required"}), 400
 
-        service = get_drive_service()
-        if not service:
-            return jsonify({"error": "Google Drive 認証に失敗しました"}), 500
+        # OAuthトークンをRenderの環境変数から読み込む
+        token_json = os.environ.get("GOOGLE_TOKEN_JSON")
+        creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
 
-        # ファイルをJSONとしてバイナリ化
-        file_bytes = io.BytesIO(json.dumps(content, ensure_ascii=False, indent=2).encode("utf-8"))
+        if not token_json or not creds_json:
+            return jsonify({"error": "Missing OAuth credentials"}), 500
 
-        # 既存ファイルを検索
-        results = service.files().list(
-            q=f"name='{file_name}' and trashed=false",
-            spaces="drive",
-            fields="files(id, name)"
+        token_data = json.loads(token_json)
+        creds_data = json.loads(creds_json)
+
+        creds = Credentials(
+            token=token_data.get("token"),
+            refresh_token=token_data.get("refresh_token"),
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=creds_data["installed"]["client_id"],
+            client_secret=creds_data["installed"]["client_secret"],
+            scopes=[
+                "https://www.googleapis.com/auth/drive.file",
+                "https://www.googleapis.com/auth/drive.metadata",
+                "https://www.googleapis.com/auth/drive.appdata"
+            ]
+        )
+
+        service = build("drive", "v3", credentials=creds)
+
+        # Driveにアップロード
+        file_metadata = {"name": file_name}
+        media = MediaIoBaseUpload(
+            io.BytesIO(json.dumps(content, ensure_ascii=False, indent=2).encode("utf-8")),
+            mimetype="application/json"
+        )
+        uploaded_file = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields="id"
         ).execute()
 
-        if results.get("files"):
-            file_id = results["files"][0]["id"]
-            service.files().update(
-                fileId=file_id,
-                media_body=MediaIoBaseUpload(file_bytes, mimetype="application/json", resumable=True)
-            ).execute()
-            return jsonify({"status": "updated", "file_id": file_id}), 200
-        else:
-            file_metadata = {"name": file_name}
-            service.files().create(
-                body=file_metadata,
-                media_body=MediaIoBaseUpload(file_bytes, mimetype="application/json", resumable=True),
-                fields="id"
-            ).execute()
-            return jsonify({"status": "created", "file_name": file_name}), 201
+        return jsonify({"status": "uploaded", "file": file_name, "id": uploaded_file.get("id")})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-# ============================================================
-# メイン起動
-# ============================================================
-
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
