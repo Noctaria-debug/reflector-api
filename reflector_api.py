@@ -99,6 +99,23 @@ async def load_memory(request: Request):
 # ====== /health ======
 @app.get("/")
 def health():
+    return {"status": "ok", "role": "Chronicle Bridge", "time": datetime.utcnow().isoformat()}=file_id)
+        buffer = io.BytesIO()
+        downloader = MediaIoBaseDownload(buffer, request_drive)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+        buffer.seek(0)
+
+        content = json.load(buffer)
+        return {"status": "loaded", "content": content}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ====== /health ======
+@app.get("/")
+def health():
     return {"status": "ok", "role": "Chronicle Bridge", "time": datetime.utcnow().isoformat()}id"]
             drive.files().update(fileId=file_id, media_body=media_body).execute()
             return {"status": "updated", "file_id": file_id}
