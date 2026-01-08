@@ -1,11 +1,10 @@
-# reflector_api.py (Chronicle Bridge Debug Render Edition)
-# Full version with debug logging for Render environment
+# reflector_api.py (Chronicle Bridge Full Integration)
 
 from fastapi import FastAPI, HTTPException, Request
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
-import os, io, json
+import os, io, json, base64, requests
 from datetime import datetime
 
 app = FastAPI()
@@ -16,99 +15,92 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive.metadata",
 ]
 
-
 def get_drive_service():
-    """Load OAuth credentials from Render environment and log debug info."""
-    try:
-        # --- DEBUG START ---
-        print("=== [Chronicle Bridge - get_drive_service()] ===")
-        print("DEBUG_ENV_KEYS:", list(os.environ.keys())[:10])  # 最初の10個だけ表示
-        print("DEBUG_CLIENT_ID:", os.getenv("GOOGLE_CLIENT_ID"))
-        print("DEBUG_TOKEN_EXISTS:", "TOKEN_JSON" in os.environ)
-        # --- DEBUG END ---
+    """Load OAuth credentials from environment variable TOKEN_JSON."""
+    token_str = os.environ.get("TOKEN_JSON")
+    if not token_str:
+        raise HTTPException(status_code=401, detail="Missing token.json in environment")
+    creds_data = json.loads(token_str)
+    creds = Credentials.from_authorized_user_info(creds_data, SCOPES)
+    return build("drive", "v3", credentials=creds)
 
-        token_str = os.getenv("TOKEN_JSON")
-        if not token_str:
-            raise HTTPException(status_code=401, detail="Missing TOKEN_JSON in environment")
+# ====== GitHub設定 ======
+GH_OWNER = os.getenv("GH_OWNER")
+GH_REPO = os.getenv("GH_REPO")
+GH_TOKEN = os.getenv("GH_TOKEN")
 
-        creds_data = json.loads(token_str)
+def upload_to_github(path: str, content: str, message: str):
+    """Upload file content to GitHub repo"""
+    url = f"https://api.github.com/repos/{GH_OWNER}/{GH_REPO}/contents/{path}"
+    headers = {"Authorization": f"token {GH_TOKEN}"}
+    data = {
+        "message": message,
+        "content": base64.b64encode(content.encode("utf-8")).decode("utf-8"),
+    }
+    resp = requests.put(url, headers=headers, json=data)
+    if resp.status_code not in (200, 201):
+        raise Exception(f"GitHub upload failed: {resp.text}")
+    return resp.json()
 
-        client_id = os.getenv("GOOGLE_CLIENT_ID")
-        client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
-
-        if not client_id or not client_secret:
-            raise HTTPException(status_code=401, detail="Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET")
-
-        creds = Credentials(
-            token=creds_data.get("access_token"),
-            refresh_token=creds_data.get("refresh_token"),
-            token_uri=creds_data.get("token_uri", "https://oauth2.googleapis.com/token"),
-            client_id=client_id,
-            client_secret=client_secret,
-            scopes=creds_data.get("scopes", SCOPES),
-        )
-
-        service = build("drive", "v3", credentials=creds)
-        print("DEBUG: Google Drive service initialized OK ✅")
-        return service
-
-    except Exception as e:
-        print("DEBUG_ERROR:", e)
-        raise HTTPException(status_code=500, detail=f"Google auth failed: {e}")
-
-
-# ====== /chronicle/sync ======
+# ====== /chronicle/sync (Drive→GitHubブリッジ) ======
 @app.post("/chronicle/sync")
 async def sync_memory(request: Request):
-    """Upload or update memory file to Google Drive"""
+    """Sync memory from Drive to GitHub Chronicle"""
     try:
         data = await request.json()
         file_name = data.get("file_name", "second_memory.json")
-        content = data.get("content", {})
-
-        print(f"=== [SYNC START] file_name={file_name} ===")
+        content_override = data.get("content")
 
         drive = get_drive_service()
 
+        # Search Drive for the file
         results = drive.files().list(
             q=f"name='{file_name}' and trashed=false",
             spaces="drive",
             fields="files(id, name)"
         ).execute()
         files = results.get("files", [])
+        if not files:
+            raise HTTPException(status_code=404, detail="File not found in Drive")
 
-        media_body = MediaIoBaseUpload(
-            io.BytesIO(json.dumps(content, ensure_ascii=False, indent=2).encode("utf-8")),
-            mimetype="application/json"
+        file_id = files[0]["id"]
+        request_drive = drive.files().get_media(fileId=file_id)
+        buffer = io.BytesIO()
+        downloader = MediaIoBaseDownload(buffer, request_drive)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+        buffer.seek(0)
+        content = json.load(buffer)
+
+        # If override data was sent, update Drive file first
+        if content_override:
+            content = content_override
+            media_body = MediaIoBaseUpload(
+                io.BytesIO(json.dumps(content).encode("utf-8")),
+                mimetype="application/json"
+            )
+            drive.files().update(fileId=file_id, media_body=media_body).execute()
+
+        # Upload to GitHub
+        upload_to_github(
+            f"data/memory/{file_name}",
+            json.dumps(content, ensure_ascii=False, indent=2),
+            f"Sync from Reflector at {datetime.utcnow().isoformat()}"
         )
 
-        if files:
-            file_id = files[0]["id"]
-            drive.files().update(fileId=file_id, media_body=media_body).execute()
-            print(f"DEBUG: File updated on Drive → {file_id}")
-            return {"status": "updated", "file_id": file_id}
-        else:
-            file_metadata = {"name": file_name}
-            file = drive.files().create(
-                body=file_metadata, media_body=media_body, fields="id"
-            ).execute()
-            print(f"DEBUG: New file created → {file.get('id')}")
-            return {"status": "created", "file_id": file.get("id")}
+        return {"status": "synced", "file": file_name}
 
     except Exception as e:
-        print("SYNC_ERROR:", e)
         raise HTTPException(status_code=500, detail=str(e))
-
 
 # ====== /chronicle/load ======
 @app.post("/chronicle/load")
 async def load_memory(request: Request):
-    """Read memory file from Google Drive"""
+    """Read memory file from Drive"""
     try:
         data = await request.json()
         file_name = data.get("file_name", "second_memory.json")
-
-        print(f"=== [LOAD START] file_name={file_name} ===")
 
         drive = get_drive_service()
 
@@ -131,17 +123,12 @@ async def load_memory(request: Request):
         buffer.seek(0)
 
         content = json.load(buffer)
-        print(f"DEBUG: File {file_name} loaded successfully ✅")
         return {"status": "loaded", "content": content}
 
     except Exception as e:
-        print("LOAD_ERROR:", e)
         raise HTTPException(status_code=500, detail=str(e))
-
 
 # ====== /health ======
 @app.get("/")
 def health():
-    """Health check endpoint"""
-    print("DEBUG: /health checked at", datetime.utcnow().isoformat())
     return {"status": "ok", "role": "Chronicle Bridge", "time": datetime.utcnow().isoformat()}
