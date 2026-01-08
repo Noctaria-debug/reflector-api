@@ -1,4 +1,4 @@
-# reflector_api.py (Chronicle Bridge Full Integration)
+# reflector_api.py (Chronicle Bridge – Fixed OAuth + GitHub Sync)
 
 from fastapi import FastAPI, HTTPException, Request
 from googleapiclient.discovery import build
@@ -16,11 +16,20 @@ SCOPES = [
 ]
 
 def get_drive_service():
-    """Load OAuth credentials from environment variable TOKEN_JSON."""
+    """Load OAuth credentials from environment variable TOKEN_JSON and enforce client info."""
     token_str = os.environ.get("TOKEN_JSON")
     if not token_str:
         raise HTTPException(status_code=401, detail="Missing token.json in environment")
+
     creds_data = json.loads(token_str)
+
+    # 明示的にクライアントID/シークレットを追加
+    creds_data["client_id"] = os.environ.get("GOOGLE_CLIENT_ID")
+    creds_data["client_secret"] = os.environ.get("GOOGLE_CLIENT_SECRET")
+
+    if not creds_data["client_id"] or not creds_data["client_secret"]:
+        raise HTTPException(status_code=401, detail="Missing Google OAuth client info")
+
     creds = Credentials.from_authorized_user_info(creds_data, SCOPES)
     return build("drive", "v3", credentials=creds)
 
