@@ -1,104 +1,109 @@
 import os
 import json
 import base64
+import io
 import requests
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 
 app = FastAPI()
 
-# -------------------------------
+# ==========================
 # モデル
-# -------------------------------
+# ==========================
 class ChroniclePayload(BaseModel):
     file_name: str
     content: dict = None
 
 
-# -------------------------------
-# Google Drive 同期関数
-# -------------------------------
+# ==========================
+# Google Drive 同期
+# ==========================
 def sync_to_google_drive(file_name, content):
-    creds_data = json.loads(os.getenv("TOKEN_JSON"))
-    creds = Credentials.from_authorized_user_info(creds_data)
-    service = build("drive", "v3", credentials=creds)
+    try:
+        creds_data = json.loads(os.getenv("TOKEN_JSON"))
+        creds = Credentials.from_authorized_user_info(creds_data)
+        service = build("drive", "v3", credentials=creds)
 
-    # 既存ファイルを検索
-    results = service.files().list(
-        q=f"name='{file_name}' and trashed=false",
-        spaces="drive",
-        fields="files(id, name)"
-    ).execute()
-    files = results.get("files", [])
+        results = service.files().list(
+            q=f"name='{file_name}' and trashed=false",
+            spaces="drive",
+            fields="files(id, name)"
+        ).execute()
 
-    content_str = json.dumps(content, ensure_ascii=False, indent=2)
-    media_body = {"mimeType": "application/json", "body": content_str}
+        files = results.get("files", [])
+        content_str = json.dumps(content, ensure_ascii=False, indent=2)
+        media_body = MediaIoBaseUpload(io.BytesIO(content_str.encode()), mimetype="application/json")
 
-    if files:
-        file_id = files[0]["id"]
-        service.files().update(fileId=file_id, body={"name": file_name}, media_body=media_body).execute()
-        return {"status": "updated", "file_id": file_id}
-    else:
-        file_metadata = {"name": file_name}
-        file = service.files().create(body=file_metadata, media_body=media_body, fields="id").execute()
-        return {"status": "created", "file_id": file.get("id")}
+        if files:
+            file_id = files[0]["id"]
+            service.files().update(
+                fileId=file_id,
+                body={"name": file_name},
+                media_body=media_body
+            ).execute()
+            return {"status": "updated", "file_id": file_id}
+        else:
+            file_metadata = {"name": file_name}
+            file = service.files().create(
+                body=file_metadata,
+                media_body=media_body,
+                fields="id"
+            ).execute()
+            return {"status": "created", "file_id": file.get("id")}
+    except Exception as e:
+        return {"error": str(e)}
 
 
-# -------------------------------
-# GitHub 同期関数
-# -------------------------------
+# ==========================
+# GitHub 同期
+# ==========================
 def sync_to_github(file_name, content):
-    owner = os.getenv("GH_OWNER")
-    repo = os.getenv("GH_REPO")
-    token = os.getenv("GH_TOKEN")
+    try:
+        owner = os.getenv("GH_OWNER")
+        repo = os.getenv("GH_REPO")
+        token = os.getenv("GH_TOKEN")
 
-    if not all([owner, repo, token]):
-        raise HTTPException(status_code=400, detail="GitHub環境変数が不足しています")
+        if not all([owner, repo, token]):
+            raise HTTPException(status_code=400, detail="GitHub環境変数が不足しています")
 
-    url = f"https://api.github.com/repos/{owner}/{repo}/contents/{file_name}"
-    headers = {"Authorization": f"token {token}"}
+        url = f"https://api.github.com/repos/{owner}/{repo}/contents/{file_name}"
+        headers = {"Authorization": f"token {token}"}
 
-    # 現在のファイルSHAを取得（存在すれば更新、なければ新規）
-    r = requests.get(url, headers=headers)
-    sha = None
-    if r.status_code == 200:
-        sha = r.json().get("sha")
+        # ファイルの存在確認（SHA取得）
+        r = requests.get(url, headers=headers)
+        sha = r.json().get("sha") if r.status_code == 200 else None
 
-    encoded_content = base64.b64encode(json.dumps(content, ensure_ascii=False, indent=2).encode()).decode()
+        encoded_content = base64.b64encode(
+            json.dumps(content, ensure_ascii=False, indent=2).encode()
+        ).decode()
 
-    data = {
-        "message": f"update: {file_name}",
-        "content": encoded_content
-    }
-    if sha:
-        data["sha"] = sha  # 上書き用
+        data = {"message": f"update: {file_name}", "content": encoded_content}
+        if sha:
+            data["sha"] = sha
 
-    response = requests.put(url, headers=headers, json=data)
-    if response.status_code not in [200, 201]:
-        raise HTTPException(status_code=response.status_code, detail=response.text)
+        response = requests.put(url, headers=headers, json=data)
+        if response.status_code not in [200, 201]:
+            return {"error": f"GitHub sync failed: {response.text}"}
 
-    return {"status": "github_synced", "response": response.json()}
+        return {"status": "github_synced", "response": response.json()}
+    except Exception as e:
+        return {"error": str(e)}
 
 
-# -------------------------------
+# ==========================
 # /chronicle/sync
-# -------------------------------
+# ==========================
 @app.post("/chronicle/sync")
 async def chronicle_sync(payload: ChroniclePayload):
     file_name = payload.file_name
     content = payload.content or {}
 
-    try:
-        drive_result = sync_to_google_drive(file_name, content)
-    except Exception as e:
-        drive_result = {"error": str(e)}
-
-    try:
-        github_result = sync_to_github(file_name, content)
-    except Exception as e:
-        github_result = {"error": str(e)}
+    drive_result = sync_to_google_drive(file_name, content)
+    github_result = sync_to_github(file_name, content)
 
     return {
         "google_drive": drive_result,
@@ -106,9 +111,9 @@ async def chronicle_sync(payload: ChroniclePayload):
     }
 
 
-# -------------------------------
+# ==========================
 # /chronicle/load
-# -------------------------------
+# ==========================
 @app.post("/chronicle/load")
 async def chronicle_load(payload: ChroniclePayload):
     creds_data = json.loads(os.getenv("TOKEN_JSON"))
