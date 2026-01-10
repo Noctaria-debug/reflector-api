@@ -75,31 +75,24 @@ async def sync_memory(request: Request, x_api_key: str = Header(None), authoriza
             ).execute()
             drive_status = {"status": "created", "file_id": file.get("id")}
 
-        # ===== GitHub同期 =====
-        gh_owner = os.environ.get("GH_OWNER")
-        gh_repo = os.environ.get("GH_REPO")
-        gh_token = os.environ.get("GH_TOKEN")
+        
+      # ===== GitHub同期 =====
+if gh_owner and gh_repo and gh_token:
+    url = f"https://api.github.com/repos/{gh_owner}/{gh_repo}/contents/{file_name}"
+    headers = {"Authorization": f"token {gh_token}"}
+    
+    # 既存ファイルのSHAを取得
+    get_res = requests.get(url, headers=headers)
+    sha = get_res.json().get("sha", None)
 
-        if gh_owner and gh_repo and gh_token:
-            url = f"https://api.github.com/repos/{gh_owner}/{gh_repo}/contents/{file_name}"
-            headers = {"Authorization": f"token {gh_token}"}
-            data = {
-                "message": f"update: {file_name}",
-                "content": base64.b64encode(json.dumps(content).encode()).decode()
-            }
-            r = requests.put(url, headers=headers, json=data)
-            github_status = {
-                "status": "github_synced" if r.status_code in (200, 201) else "github_error",
-                "response": r.json()
-            }
-        else:
-            github_status = {"status": "skipped"}
+    data = {
+        "message": f"update: {file_name}",
+        "content": base64.b64encode(json.dumps(content).encode()).decode()
+    }
+    if sha:
+        data["sha"] = sha  # ここがポイント
 
-        return {"google_drive": drive_status, "github": github_status}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
+    r = requests.put(url, headers=headers, json=data)
 
 # ====== /health ======
 @app.get("/")
