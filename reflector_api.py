@@ -1,9 +1,9 @@
-# reflector_api.py (GPT Bridge Enabled)
+# reflector_api.py (v3.2) — Drive + GitHub sync stable release
 
 from fastapi import FastAPI, HTTPException, Request, Header
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
-from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseUpload
 import os, io, json, base64, requests
 from datetime import datetime
 
@@ -25,7 +25,7 @@ SCOPES = [
 ]
 
 def get_drive_service():
-    """Load OAuth credentials from environment variable TOKEN_JSON."""
+    """Load OAuth credentials from TOKEN_JSON environment variable."""
     token_str = os.environ.get("TOKEN_JSON")
     if not token_str:
         raise HTTPException(status_code=401, detail="Missing token.json in environment")
@@ -35,16 +35,9 @@ def get_drive_service():
 
 # ====== /chronicle/sync ======
 @app.post("/chronicle/sync")
-async def sync_memory(request: Request, x_api_key: str = Header(None), authorization: str = Header(None)):
-    """Upload or update memory file to Google Drive and GitHub"""
-    # Accept both header formats: X-Api-Key and Authorization: Bearer
-    request_key = None
-    if x_api_key:
-        request_key = x_api_key
-    elif authorization and authorization.startswith("Bearer "):
-        request_key = authorization.split(" ")[1]
-
-    verify_api_key(request_key)
+async def sync_memory(request: Request, x_api_key: str = Header(None)):
+    """Upload or update memory file to Google Drive and GitHub."""
+    verify_api_key(x_api_key)
     try:
         data = await request.json()
         file_name = data.get("file_name", "second_memory.json")
@@ -52,6 +45,7 @@ async def sync_memory(request: Request, x_api_key: str = Header(None), authoriza
 
         drive = get_drive_service()
 
+        # ===== Google Drive Upload =====
         results = drive.files().list(
             q=f"name='{file_name}' and trashed=false",
             spaces="drive",
@@ -60,7 +54,7 @@ async def sync_memory(request: Request, x_api_key: str = Header(None), authoriza
         files = results.get("files", [])
 
         media_body = MediaIoBaseUpload(
-            io.BytesIO(json.dumps(content).encode("utf-8")),
+            io.BytesIO(json.dumps(content, ensure_ascii=False, indent=2).encode("utf-8")),
             mimetype="application/json"
         )
 
@@ -75,24 +69,48 @@ async def sync_memory(request: Request, x_api_key: str = Header(None), authoriza
             ).execute()
             drive_status = {"status": "created", "file_id": file.get("id")}
 
-        
-      # ===== GitHub同期 =====
-if gh_owner and gh_repo and gh_token:
-    url = f"https://api.github.com/repos/{gh_owner}/{gh_repo}/contents/{file_name}"
-    headers = {"Authorization": f"token {gh_token}"}
-    
-    # 既存ファイルのSHAを取得
-    get_res = requests.get(url, headers=headers)
-    sha = get_res.json().get("sha", None)
+        # ===== GitHub同期 =====
+        gh_owner = os.environ.get("GH_OWNER")
+        gh_repo = os.environ.get("GH_REPO")
+        gh_token = os.environ.get("GH_TOKEN")
 
-    data = {
-        "message": f"update: {file_name}",
-        "content": base64.b64encode(json.dumps(content).encode()).decode()
-    }
-    if sha:
-        data["sha"] = sha  # ここがポイント
+        github_status = {"status": "skipped"}
 
-    r = requests.put(url, headers=headers, json=data)
+        if gh_owner and gh_repo and gh_token:
+            try:
+                url = f"https://api.github.com/repos/{gh_owner}/{gh_repo}/contents/{file_name}"
+                headers = {"Authorization": f"token {gh_token}"}
+
+                # 既存ファイルのSHAを取得
+                get_res = requests.get(url, headers=headers)
+                sha = None
+                if get_res.status_code == 200:
+                    sha = get_res.json().get("sha")
+
+                data = {
+                    "message": f"update: {file_name}",
+                    "content": base64.b64encode(json.dumps(content, ensure_ascii=False, indent=2).encode()).decode()
+                }
+                if sha:
+                    data["sha"] = sha
+
+                r = requests.put(url, headers=headers, json=data)
+                github_status = {
+                    "status": "github_synced" if r.status_code in (200, 201) else "github_error",
+                    "response": r.json()
+                }
+            except Exception as gh_err:
+                github_status = {"status": "github_error", "error": str(gh_err)}
+
+        return {
+            "google_drive": drive_status,
+            "github": github_status,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # ====== /health ======
 @app.get("/")
