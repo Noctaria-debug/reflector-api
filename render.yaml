@@ -4,9 +4,7 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn reflector_api:app
+    startCommand: gunicorn reflector_api:app --bind 0.0.0.0:$PORT
     envVars:
       - key: REFLECTOR_API_KEY
         sync: false
-      - key: PORT
-        value: 10000
