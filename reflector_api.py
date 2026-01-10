@@ -1,4 +1,6 @@
-# reflector_api.py (v3.3) — Safe Header Verification Edition
+# reflector_api.py
+# Version: 4.0 (Safe Adaptive Edition)
+# Purpose: Reflector Bridge API between Second Chronicle GPT and External Storage
 
 from fastapi import FastAPI, HTTPException, Request
 from googleapiclient.discovery import build
@@ -7,33 +9,50 @@ from googleapiclient.http import MediaIoBaseUpload
 import os, io, json, base64, requests
 from datetime import datetime
 
-app = FastAPI()
+app = FastAPI(
+    title="Reflector Chronicle Bridge",
+    description="API bridge between Second Chronicle GPT and Reflector storage (Drive & GitHub).",
+    version="4.0.0"
+)
 
-# ====== 認証設定 ======
+# ====== 設定値 ======
 API_KEY = os.environ.get("REFLECTOR_API_KEY", None)
-
-def verify_api_key_from_headers(headers: dict):
-    if not API_KEY:
-        raise HTTPException(status_code=500, detail="Server missing API key")
-
-    # 大文字小文字・ハイフン揺れに対応
-    for key in headers.keys():
-        if key.lower() == "x-api-key":
-            if headers[key] == API_KEY:
-                return True
-            else:
-                raise HTTPException(status_code=403, detail="Unauthorized: invalid API key")
-
-    # 見つからなかった場合
-    raise HTTPException(status_code=403, detail="Unauthorized: missing API key")
-
-# ====== Google設定 ======
 SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
     "https://www.googleapis.com/auth/drive.metadata",
 ]
 
+# ====== 認証 ======
+async def verify_api_key(request: Request):
+    """
+    Smart verification that supports:
+      - Header key: X-Api-Key
+      - JSON body field: api_key
+    """
+    if not API_KEY:
+        raise HTTPException(status_code=500, detail="Server missing API key")
+
+    headers = {k.lower(): v for k, v in request.headers.items()}
+
+    # 1️⃣ Header チェック
+    header_key = headers.get("x-api-key")
+    if header_key and header_key == API_KEY:
+        return True
+
+    # 2️⃣ JSON body チェック（スマホUIなどでヘッダー送信不可時）
+    try:
+        data = await request.json()
+        if data.get("api_key") == API_KEY:
+            return True
+    except Exception:
+        pass
+
+    # 3️⃣ どちらも不一致
+    raise HTTPException(status_code=403, detail="Unauthorized: invalid or missing API key")
+
+# ====== Drive認証 ======
 def get_drive_service():
+    """Load OAuth credentials from environment variable TOKEN_JSON"""
     token_str = os.environ.get("TOKEN_JSON")
     if not token_str:
         raise HTTPException(status_code=401, detail="Missing token.json in environment")
@@ -41,20 +60,23 @@ def get_drive_service():
     creds = Credentials.from_authorized_user_info(creds_data, SCOPES)
     return build("drive", "v3", credentials=creds)
 
-# ====== /chronicle/sync ======
+# ====== メインエンドポイント ======
 @app.post("/chronicle/sync")
-async def sync_memory(request: Request):
-    """Upload or update memory file to Google Drive and GitHub."""
-    verify_api_key_from_headers(request.headers)
+async def sync_chronicle(request: Request):
+    """
+    Upload or update personality/memory file to Google Drive and GitHub.
+    Safe against header dropouts, retry safe, and compatible with mobile GPT Actions.
+    """
+    await verify_api_key(request)
 
     try:
         data = await request.json()
-        file_name = data.get("file_name", "second_memory.json")
+        file_name = data.get("file_name", "second_personality.json")
         content = data.get("content", {})
 
         drive = get_drive_service()
 
-        # ===== Google Drive Upload =====
+        # === Google Drive 処理 ===
         results = drive.files().list(
             q=f"name='{file_name}' and trashed=false",
             spaces="drive",
@@ -78,13 +100,12 @@ async def sync_memory(request: Request):
             ).execute()
             drive_status = {"status": "created", "file_id": file.get("id")}
 
-        # ===== GitHub同期 =====
+        # === GitHub 同期処理 ===
         gh_owner = os.environ.get("GH_OWNER")
         gh_repo = os.environ.get("GH_REPO")
         gh_token = os.environ.get("GH_TOKEN")
 
         github_status = {"status": "skipped"}
-
         if gh_owner and gh_repo and gh_token:
             url = f"https://api.github.com/repos/{gh_owner}/{gh_repo}/contents/{file_name}"
             headers = {"Authorization": f"token {gh_token}"}
@@ -92,27 +113,33 @@ async def sync_memory(request: Request):
             get_res = requests.get(url, headers=headers)
             sha = get_res.json().get("sha") if get_res.status_code == 200 else None
 
-            data = {
+            payload = {
                 "message": f"update: {file_name}",
-                "content": base64.b64encode(json.dumps(content, ensure_ascii=False, indent=2).encode()).decode()
+                "content": base64.b64encode(
+                    json.dumps(content, ensure_ascii=False, indent=2).encode()
+                ).decode(),
             }
             if sha:
-                data["sha"] = sha
+                payload["sha"] = sha
 
-            r = requests.put(url, headers=headers, json=data)
+            r = requests.put(url, headers=headers, json=payload)
             github_status = {
                 "status": "github_synced" if r.status_code in (200, 201) else "github_error",
-                "response": r.json()
+                "response": r.json(),
             }
 
+        # === 結果 ===
         return {
+            "status": "success",
             "google_drive": drive_status,
             "github": github_status,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
         }
 
+    except HTTPException as e:
+        raise e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
 # ====== /health ======
 @app.get("/")
@@ -120,5 +147,6 @@ def health():
     return {
         "status": "ok",
         "role": "Reflector Bridge",
-        "time": datetime.utcnow().isoformat()
+        "version": "4.0",
+        "time": datetime.utcnow().isoformat(),
     }
