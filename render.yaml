@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: reflector-api
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn reflector_api:app
+    envVars:
+      - key: REFLECTOR_API_KEY
+        sync: false
+      - key: PORT
+        value: 10000
