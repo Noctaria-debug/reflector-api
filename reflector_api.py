@@ -35,9 +35,16 @@ def get_drive_service():
 
 # ====== /chronicle/sync ======
 @app.post("/chronicle/sync")
-async def sync_memory(request: Request, x_api_key: str = Header(None)):
+async def sync_memory(request: Request, x_api_key: str = Header(None), authorization: str = Header(None)):
     """Upload or update memory file to Google Drive and GitHub"""
-    verify_api_key(x_api_key)
+    # Accept both header formats: X-Api-Key and Authorization: Bearer
+    request_key = None
+    if x_api_key:
+        request_key = x_api_key
+    elif authorization and authorization.startswith("Bearer "):
+        request_key = authorization.split(" ")[1]
+
+    verify_api_key(request_key)
     try:
         data = await request.json()
         file_name = data.get("file_name", "second_memory.json")
