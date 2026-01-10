@@ -1,39 +1,52 @@
-# app.py  (Reflector Stable Final)
-
 from flask import Flask, request, jsonify
 import os
 import json
+import datetime
 
 app = Flask(__name__)
 
-# 環境変数に設定したAPIキー
-VALID_API_KEY = os.getenv("REFLECTOR_API_KEY", "RFX-PROD-2026-XA7Y9VQ3KZ4R2M8T-LJQ8F0P@!B5N")
+# 環境変数からAPIキーを取得
+API_KEY = os.getenv("REFLECTOR_API_KEY")
 
 @app.route("/chronicle/sync", methods=["POST"])
 def sync_chronicle():
     try:
-        api_key = request.headers.get("X-Api-Key")
-        if api_key != VALID_API_KEY:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Missing JSON body"}), 400
+
+        # APIキーの検証
+        key = data.get("api_key")
+        if not key or key != API_KEY:
             return jsonify({"error": "Unauthorized: invalid API key"}), 403
 
-        data = request.json
-        file_name = data.get("file_name", "second_personality.json")
+        file_name = data.get("file_name", "default.json")
         content = data.get("content", {})
 
-        # （Drive/GitHub同期処理は既存でOK）
-        print(f"[SYNC OK] {file_name}: {content}")
+        # ローカルに一時保存（Renderでは一時ファイル扱い）
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        local_path = f"/tmp/{file_name}"
+        with open(local_path, "w", encoding="utf-8") as f:
+            json.dump(content, f, ensure_ascii=False, indent=2)
+
+        print(f"[SYNC] {file_name} saved locally at {timestamp}")
 
         return jsonify({
             "status": "success",
-            "file": file_name,
-            "message": "Sync completed successfully."
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+            "file_name": file_name,
+            "timestamp": timestamp,
+            "message": "File synced successfully"
+        }), 200
 
-@app.route("/")
-def health():
-    return {"status": "ok", "service": "Reflector API"}
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({"status": "online", "message": "Reflector API ready"}), 200
+
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=3000)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
