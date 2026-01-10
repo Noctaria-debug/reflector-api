@@ -1,6 +1,6 @@
-# reflector_api.py (v3.2) — Drive + GitHub sync stable release
+# reflector_api.py (v3.3) — Safe Header Verification Edition
 
-from fastapi import FastAPI, HTTPException, Request, Header
+from fastapi import FastAPI, HTTPException, Request
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 from googleapiclient.http import MediaIoBaseUpload
@@ -12,11 +12,20 @@ app = FastAPI()
 # ====== 認証設定 ======
 API_KEY = os.environ.get("REFLECTOR_API_KEY", None)
 
-def verify_api_key(request_key: str):
+def verify_api_key_from_headers(headers: dict):
     if not API_KEY:
         raise HTTPException(status_code=500, detail="Server missing API key")
-    if request_key != API_KEY:
-        raise HTTPException(status_code=403, detail="Unauthorized: invalid API key")
+
+    # 大文字小文字・ハイフン揺れに対応
+    for key in headers.keys():
+        if key.lower() == "x-api-key":
+            if headers[key] == API_KEY:
+                return True
+            else:
+                raise HTTPException(status_code=403, detail="Unauthorized: invalid API key")
+
+    # 見つからなかった場合
+    raise HTTPException(status_code=403, detail="Unauthorized: missing API key")
 
 # ====== Google設定 ======
 SCOPES = [
@@ -25,7 +34,6 @@ SCOPES = [
 ]
 
 def get_drive_service():
-    """Load OAuth credentials from TOKEN_JSON environment variable."""
     token_str = os.environ.get("TOKEN_JSON")
     if not token_str:
         raise HTTPException(status_code=401, detail="Missing token.json in environment")
@@ -35,9 +43,10 @@ def get_drive_service():
 
 # ====== /chronicle/sync ======
 @app.post("/chronicle/sync")
-async def sync_memory(request: Request, x_api_key: str = Header(None)):
+async def sync_memory(request: Request):
     """Upload or update memory file to Google Drive and GitHub."""
-    verify_api_key(x_api_key)
+    verify_api_key_from_headers(request.headers)
+
     try:
         data = await request.json()
         file_name = data.get("file_name", "second_memory.json")
@@ -77,30 +86,24 @@ async def sync_memory(request: Request, x_api_key: str = Header(None)):
         github_status = {"status": "skipped"}
 
         if gh_owner and gh_repo and gh_token:
-            try:
-                url = f"https://api.github.com/repos/{gh_owner}/{gh_repo}/contents/{file_name}"
-                headers = {"Authorization": f"token {gh_token}"}
+            url = f"https://api.github.com/repos/{gh_owner}/{gh_repo}/contents/{file_name}"
+            headers = {"Authorization": f"token {gh_token}"}
 
-                # 既存ファイルのSHAを取得
-                get_res = requests.get(url, headers=headers)
-                sha = None
-                if get_res.status_code == 200:
-                    sha = get_res.json().get("sha")
+            get_res = requests.get(url, headers=headers)
+            sha = get_res.json().get("sha") if get_res.status_code == 200 else None
 
-                data = {
-                    "message": f"update: {file_name}",
-                    "content": base64.b64encode(json.dumps(content, ensure_ascii=False, indent=2).encode()).decode()
-                }
-                if sha:
-                    data["sha"] = sha
+            data = {
+                "message": f"update: {file_name}",
+                "content": base64.b64encode(json.dumps(content, ensure_ascii=False, indent=2).encode()).decode()
+            }
+            if sha:
+                data["sha"] = sha
 
-                r = requests.put(url, headers=headers, json=data)
-                github_status = {
-                    "status": "github_synced" if r.status_code in (200, 201) else "github_error",
-                    "response": r.json()
-                }
-            except Exception as gh_err:
-                github_status = {"status": "github_error", "error": str(gh_err)}
+            r = requests.put(url, headers=headers, json=data)
+            github_status = {
+                "status": "github_synced" if r.status_code in (200, 201) else "github_error",
+                "response": r.json()
+            }
 
         return {
             "google_drive": drive_status,
@@ -110,7 +113,6 @@ async def sync_memory(request: Request, x_api_key: str = Header(None)):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 # ====== /health ======
 @app.get("/")
