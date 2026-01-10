@@ -1,12 +1,12 @@
 # =============================================================
-# Reflector API - Final Integrated Version
-# (for use with Reflector Proxy + Second Chronicle GPT)
+# Reflector API - Unified Emotion/Memory Sync Version
+# (Safe upgrade for Second Chronicle GPT + Reflector Proxy)
 # =============================================================
 
 from fastapi import FastAPI, HTTPException, Request, Header
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
-from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseUpload
 import os, io, json, base64, requests
 from datetime import datetime
 
@@ -59,15 +59,18 @@ async def sync_memory(request: Request, x_api_key: str = Header(None)):
         # ----- データ抽出ロジック -----
         file_name = data.get("file_name", "second_memory.json")
 
-        # content, data, emotion のいずれにも対応
-        content = (
-            data.get("content") or
-            data.get("data") or
-            data.get("emotion") or
-            data.get("memory") or
-            data.get("reflection") or
-            {"raw": data}
-        )
+        # ✅ すべての入力フィールドを統合
+        content = {
+            "test": data.get("test"),
+            "data": data.get("data"),
+            "emotion": data.get("emotion"),
+            "memory": data.get("memory"),
+            "reflection": data.get("reflection"),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+        # None キーを削除
+        content = {k: v for k, v in content.items() if v is not None}
 
         # Drive クライアント初期化
         drive = get_drive_service()
@@ -137,7 +140,8 @@ async def sync_memory(request: Request, x_api_key: str = Header(None)):
             "status": "success",
             "timestamp": datetime.utcnow().isoformat(),
             "google_drive": drive_status,
-            "github": github_status
+            "github": github_status,
+            "data_received": content
         }
 
     except Exception as e:
