@@ -18,7 +18,9 @@ app = FastAPI()
 API_KEY = os.environ.get("REFLECTOR_API_KEY")
 
 def verify_api_key(request_key: str):
-    """Verify Reflector API key (used by Reflector Proxy)."""
+    """
+    Verify Reflector API key (used by Reflector Proxy).
+    """
     if not API_KEY:
         raise HTTPException(status_code=500, detail="Server missing API key")
     if request_key != API_KEY:
@@ -34,7 +36,9 @@ SCOPES = [
 ]
 
 def get_drive_service():
-    """Load OAuth credentials from environment variable TOKEN_JSON."""
+    """
+    Load OAuth credentials from environment variable TOKEN_JSON.
+    """
     token_str = os.environ.get("TOKEN_JSON")
     if not token_str:
         raise HTTPException(status_code=401, detail="Missing token.json in environment")
@@ -50,7 +54,9 @@ def get_drive_service():
 # 🧠 Drive Utility - Load and Merge
 # =============================================================
 def load_existing_json(drive, file_id):
-    """Download and return existing JSON file content."""
+    """
+    Download and return existing JSON file content.
+    """
     request = drive.files().get_media(fileId=file_id)
     fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, request)
@@ -64,7 +70,9 @@ def load_existing_json(drive, file_id):
         return {}
 
 def merge_json(old, new):
-    """Recursively merge JSON (keeping old keys unless overwritten)."""
+    """
+    Recursively merge two JSON objects (keeping old keys unless overwritten).
+    """
     merged = old.copy()
     for k, v in new.items():
         if isinstance(v, dict) and k in merged and isinstance(merged[k], dict):
@@ -78,13 +86,16 @@ def merge_json(old, new):
 # =============================================================
 @app.post("/chronicle/sync")
 async def sync_memory(request: Request, x_api_key: str = Header(None)):
+    """
+    Upload or update memory/reflection/emotion data to Google Drive and GitHub.
+    """
     verify_api_key(x_api_key)
     data = await request.json()
 
     file_name = data.get("file_name", "second_memory.json")
     drive = get_drive_service()
 
-    # 入力整形
+    # 入力整形：不要なキーは除外
     new_content = {
         "test": data.get("test"),
         "data": data.get("data"),
@@ -103,7 +114,7 @@ async def sync_memory(request: Request, x_api_key: str = Header(None)):
     ).execute()
     files = results.get("files", [])
 
-    # ファイル読み込み・マージ
+    # 既存ファイル読み込み・マージ（create_newまたはreset_drive_file指定時はスキップ）
     if files and not data.get("create_new") and not data.get("reset_drive_file"):
         file_id = files[0]["id"]
         existing_content = load_existing_json(drive, file_id)
@@ -112,7 +123,7 @@ async def sync_memory(request: Request, x_api_key: str = Header(None)):
     else:
         target_content = new_content
 
-    # Drive 更新 or 新規作成
+    # Drive 更新または新規作成
     media_body = MediaIoBaseUpload(
         io.BytesIO(json.dumps(target_content, ensure_ascii=False, indent=2).encode("utf-8")),
         mimetype="application/json"
@@ -133,7 +144,7 @@ async def sync_memory(request: Request, x_api_key: str = Header(None)):
             "link": f"https://drive.google.com/file/d/{new_file.get('id')}/view"
         }
 
-    # GitHub 同期
+    # GitHub 同期（環境変数が存在する場合）
     gh_owner = os.environ.get("GH_OWNER")
     gh_repo = os.environ.get("GH_REPO")
     gh_token = os.environ.get("GH_TOKEN")
@@ -143,6 +154,7 @@ async def sync_memory(request: Request, x_api_key: str = Header(None)):
         headers = {"Authorization": f"token {gh_token}"}
         r_get = requests.get(url, headers=headers)
         sha = r_get.json().get("sha") if r_get.status_code == 200 else None
+
         payload = {
             "message": f"sync: {file_name}",
             "content": base64.b64encode(
@@ -151,6 +163,7 @@ async def sync_memory(request: Request, x_api_key: str = Header(None)):
         }
         if sha:
             payload["sha"] = sha
+
         r_put = requests.put(url, headers=headers, json=payload)
         github_status = {
             "status": "github_synced" if r_put.status_code in (200, 201) else "github_error",
@@ -172,6 +185,9 @@ async def sync_memory(request: Request, x_api_key: str = Header(None)):
 # =============================================================
 @app.post("/chronicle/load")
 async def load_memory(request: Request, x_api_key: str = Header(None)):
+    """
+    Load a Chronicle file from Google Drive and return its content.
+    """
     verify_api_key(x_api_key)
     data = await request.json()
     file_name = data.get("file_name", "second_memory.json")
