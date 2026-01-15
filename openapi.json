@@ -1,48 +1,95 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Reflector Sync API",
-    "version": "1.0.3",
-    "description": "Unified API for syncing memory, reflection, and emotion data via Reflector. Supports flexible fields; only 'test' is required."
+    "title": "Reflector Sync API (via Proxy)",
+    "version": "1.0.2",
+    "description": "Unified memory/reflection/emotion sync and load API for Reflector Chronicle via proxy layer."
   },
   "servers": [
     {
-      "url": "https://reflector-api.onrender.com",
-      "description": "Primary Reflector API Server"
-    },
-    {
       "url": "https://reflector-proxy.onrender.com",
-      "description": "Reflector Proxy Server"
+      "description": "Primary Reflector Proxy Server"
     }
   ],
   "paths": {
-    "/": {
-      "get": {
-        "summary": "Health check",
+    "/chronicle/sync": {
+      "post": {
+        "summary": "Create or update memory, reflection, or emotion",
+        "operationId": "syncChronicle",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "test": {
+                    "type": "string",
+                    "example": "Sync memory"
+                  },
+                  "memory": {
+                    "type": "object",
+                    "description": "Memory data to store"
+                  },
+                  "reflection": {
+                    "type": "object",
+                    "description": "Reflection data to store"
+                  },
+                  "emotion": {
+                    "type": "object",
+                    "description": "Emotion data to store"
+                  },
+                  "data": {
+                    "type": "string",
+                    "description": "Fallback text data when no structured object is used"
+                  },
+                  "create_new": {
+                    "type": "boolean",
+                    "description": "Force creation of a new file"
+                  },
+                  "reset_drive_file": {
+                    "type": "boolean",
+                    "description": "Reset and create new file if existing is unauthorized"
+                  },
+                  "file_name": {
+                    "type": "string",
+                    "description": "Target JSON filename",
+                    "example": "second_memory.json"
+                  }
+                },
+                "required": ["test"]
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
-            "description": "API is running",
+            "description": "Sync completed",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
                     "status": { "type": "string" },
-                    "role": { "type": "string" },
-                    "time": { "type": "string" },
-                    "environment": { "type": "string" }
+                    "timestamp": { "type": "string" },
+                    "google_drive": { "type": "object" },
+                    "github": { "type": "object" },
+                    "data_received": { "type": "object" }
                   }
                 }
               }
             }
+          },
+          "500": {
+            "description": "Internal Server Error"
           }
         }
       }
     },
-    "/chronicle/sync": {
+    "/chronicle/load": {
       "post": {
-        "summary": "Synchronize Chronicle data (memory, reflection, emotion)",
-        "operationId": "syncChronicle",
+        "summary": "Retrieve chronicle file from Drive",
+        "operationId": "loadChronicle",
         "requestBody": {
           "required": true,
           "content": {
@@ -52,80 +99,33 @@
                 "properties": {
                   "file_name": {
                     "type": "string",
-                    "description": "Target filename in Drive. Optional; defaults to second_memory.json"
-                  },
-                  "test": {
-                    "type": "string",
-                    "description": "Tag or label describing the sync operation",
-                    "example": "update: initial sync"
-                  },
-                  "data": {
-                    "type": "string",
-                    "description": "General data or serialized unified string"
-                  },
-                  "memory": {
-                    "type": "object",
-                    "description": "Structured memory data to sync"
-                  },
-                  "reflection": {
-                    "type": "object",
-                    "description": "Structured reflection data to sync"
-                  },
-                  "emotion": {
-                    "type": "object",
-                    "description": "Structured emotion data to sync"
-                  },
-                  "reset_drive_file": {
-                    "type": "boolean",
-                    "description": "Force new Drive file creation when encountering a 403 error"
-                  },
-                  "create_new": {
-                    "type": "boolean",
-                    "description": "Force creation of a new file regardless of existing files"
+                    "description": "Target file name",
+                    "example": "second_memory.json"
                   }
                 },
-                "required": ["test"],
-                "additionalProperties": false
+                "required": ["file_name"]
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Successful sync",
+            "description": "File loaded",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
                     "status": { "type": "string" },
-                    "timestamp": { "type": "string", "format": "date-time" },
-                    "google_drive": {
-                      "type": "object",
-                      "properties": {
-                        "status": { "type": "string" },
-                        "file_id": { "type": "string" },
-                        "link": { "type": "string" }
-                      }
-                    },
-                    "github": {
-                      "type": "object",
-                      "properties": {
-                        "status": { "type": "string" },
-                        "response": { "type": "object" }
-                      }
-                    },
-                    "data_received": {
-                      "type": "object",
-                      "description": "Echo of the data payload"
-                    }
+                    "file_id": { "type": "string" },
+                    "content": { "type": "object" }
                   }
                 }
               }
             }
           },
-          "400": {
-            "description": "Bad Request (invalid input format)"
+          "404": {
+            "description": "File not found"
           },
           "500": {
             "description": "Internal Server Error"
@@ -134,5 +134,7 @@
       }
     }
   },
-  "components": {}
+  "components": {
+    "schemas": {}
+  }
 }
